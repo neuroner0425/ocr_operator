@@ -5,19 +5,50 @@ import numpy as np
 import json
 from PIL import Image
 from PIL import ImageDraw, ImageFont
+from PIL import Image, ExifTags
 
-lang = "ch"
+lang = "korean" # 'ch', 'en', 'korean', 'japan', 'chinese_cht', 'ta', 'te', 'ka', 'latin', 'arabic', 'cyrillic', 'devanagari'
 
-isPreprocessing = 0
+isPreprocessing = 1 # 0: 원본, 1: 전처리
+
+file_name = "A" # 파일명
+file_extension = ".jpeg" # 확장자
+
+font_path = "C:/NanumGothic/NanumGothic.ttf" # 폰트 경로
+
+# ----------------------------------------------
+
 ocr = PaddleOCR(lang=lang)
-
-file_name = "ocr_test"
-file_extension = ".png"
-
 
 img_path = f"{file_name}{file_extension}"
 
-image = cv2.imread(img_path)
+def rotate_image_based_on_exif(image_path):
+    img = Image.open(image_path)
+
+    try:
+        for orientation in ExifTags.TAGS.keys():
+            if ExifTags.TAGS[orientation] == 'Orientation':
+                break
+        
+        exif = dict(img._getexif().items())
+
+        if exif[orientation] == 3:
+            img = img.rotate(180, expand=True)
+        elif exif[orientation] == 6:
+            img = img.rotate(270, expand=True)
+        elif exif[orientation] == 8:
+            img = img.rotate(90, expand=True)
+
+    except (AttributeError, KeyError, IndexError):
+        pass
+
+    return img
+
+rotated_img = rotate_image_based_on_exif(img_path)
+rotated_img_path = "rotated_" + img_path
+rotated_img.save(rotated_img_path)
+
+image = cv2.imread(rotated_img_path)
 
 hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
@@ -38,7 +69,9 @@ result = ocr.ocr(doPath, cls=True)
 
 json_data = []
 
-for line in result:
+print(result)
+
+for line in result[0]:
     text, confidence = line[1]
     box = line[0]
     if confidence > 0:
@@ -65,7 +98,7 @@ def draw_detections_and_texts(image_path, detections, output_path):
         outline_color = 255
         stroke_color = 0 
 
-    font_path = "path_to_your_font/NanumGothic.ttf"
+    
     font_size = 18
     font = ImageFont.truetype(font_path, font_size)
 
@@ -90,9 +123,9 @@ def draw_detections_and_texts(image_path, detections, output_path):
 
 img_path_out = f"{file_name}-{lang}({isPreprocessing})-out{file_extension}"
 
-draw_detections_and_texts(img_path, json_data, img_path_out)
+draw_detections_and_texts(rotated_img_path, json_data, img_path_out)
 
-with open('ocr_result.json', 'w', encoding='utf-8') as json_file:
+with open(f'ocr_result-{file_name}({isPreprocessing}).json', 'w', encoding='utf-8') as json_file:
     json.dump(json_data, json_file, ensure_ascii=False, indent=4)
 
 for detection in json_data_sorted:
