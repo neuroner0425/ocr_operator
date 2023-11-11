@@ -3,24 +3,27 @@ import cv2
 import os
 import numpy as np
 import json
-from PIL import Image
-from PIL import ImageDraw, ImageFont
-from PIL import Image, ExifTags
+from PIL import Image, ImageDraw, ImageFont, ExifTags
+import math
 
 lang = "korean" # 'ch', 'en', 'korean', 'japan', 'chinese_cht', 'ta', 'te', 'ka', 'latin', 'arabic', 'cyrillic', 'devanagari'
 
 isPreprocessing = 1 # 0: 원본, 1: 전처리
 
-file_name = "A" # 파일명
-file_extension = ".jpeg" # 확장자
+filepath = "A.jpeg" # 파일 경로
 
-font_path = "C:/NanumGothic/NanumGothic.ttf" # 폰트 경로
+font_path = "./NanumGothic.ttf" # 폰트 경로
 
 # ----------------------------------------------
 
-ocr = PaddleOCR(lang=lang)
+file_name, file_extension = os.path.splitext(filepath)
 
-img_path = f"{file_name}{file_extension}"
+if not file_extension.startswith('.'):
+    file_extension = '.' + file_extension
+
+ocr = PaddleOCR(lang=lang, use_gpu=False)
+
+img_path = f"./dolist/{file_name}{file_extension}"
 
 def rotate_image_based_on_exif(image_path):
     img = Image.open(image_path)
@@ -45,7 +48,7 @@ def rotate_image_based_on_exif(image_path):
     return img
 
 rotated_img = rotate_image_based_on_exif(img_path)
-rotated_img_path = "rotated_" + img_path
+rotated_img_path = "./rotated/rotated_" + f"{file_name}{file_extension}"
 rotated_img.save(rotated_img_path)
 
 image = cv2.imread(rotated_img_path)
@@ -57,24 +60,24 @@ equ = cv2.equalizeHist(gray)
 
 ret, thresh = cv2.threshold(equ, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-preprocessed_img_path = f"{file_name}_preprocessed{file_extension}"
+preprocessed_img_path = f"./preprocessed/{file_name}_preprocessed{file_extension}"
 cv2.imwrite(preprocessed_img_path, thresh)
 
 if isPreprocessing:
     doPath = preprocessed_img_path
 else:
-    doPath = img_path
+    doPath = rotated_img_path
 
 result = ocr.ocr(doPath, cls=True)
 
 json_data = []
 
-print(result)
+# print(result)
 
 for line in result[0]:
     text, confidence = line[1]
     box = line[0]
-    if confidence > 0:
+    if confidence > 0.5:
         detection = {
             "text": text,
             "confidence": confidence,
@@ -83,53 +86,59 @@ for line in result[0]:
         json_data.append(detection)
 json_data_sorted = sorted(json_data, key=lambda x: x['confidence'], reverse=True)
 
-print("-" * 50)
-print(json_data)
+# print("-" * 50)
+# print(json_data)
 print("-" * 50)
 
-def draw_detections_and_texts(image_path, detections, output_path):
+def draw_detections(image_path, detections, output_path):
     image = Image.open(image_path)
+    overlay = Image.new('RGBA', image.size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(overlay)
+    outline_color = (255, 0, 0, 128)
+    for detection in detections:
+        box = detection["box"]
+        flattened_box = [coordinate for point in box for coordinate in point]
+        draw.polygon(flattened_box, outline=outline_color, fill=outline_color)
+
+    combined = Image.alpha_composite(image.convert('RGBA'), overlay)
+    combined = combined.convert('RGB')
+    combined.save(output_path)
+    
+    image = Image.open(output_path)
     draw = ImageDraw.Draw(image)
     
-    if image.mode == 'RGB':
-        outline_color = (255, 0, 0)
-        stroke_color = (0, 0, 0)
-    else:
-        outline_color = 255
-        stroke_color = 0 
-
+    text_color = (255, 255, 255)
+    outline_color = (0, 0, 0)
     
-    font_size = 18
-    font = ImageFont.truetype(font_path, font_size)
-
     for detection in detections:
-        text = detection["text"]
-        confidence = detection["confidence"]
         box = detection["box"]
+        text = f"{detection['text']} ({detection['confidence']:0.3f})"
+        
+        font_size = int((box[3][1] - box[0][1])*0.4)
+        font = ImageFont.truetype(font_path, font_size)
 
-        box = np.array(box).astype(np.int32).reshape(-1, 2)
         min_x, min_y = np.min(box, axis=0)
         max_x, max_y = np.max(box, axis=0)
+        text_position = (min_x, min_y-font_size*0.5)
 
-        top_left = (min_x, min_y)
-        bottom_right = (max_x, max_y)
-
-        draw.rectangle([top_left, bottom_right], outline=outline_color, width=2)
-        text_position = (bottom_right[0] + 10, top_left[1])
-
-        draw.text(text_position, text, font=font, fill=outline_color, stroke_width=1, stroke_fill=stroke_color)
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                draw.text((text_position[0] + dx, text_position[1] + dy), text, font=font, fill=outline_color)
+        draw.text(text_position, text, font=font, fill=text_color)
 
     image.save(output_path)
+    
+img_path_out = f"./out/{file_name}-{lang}({isPreprocessing})-out.png"
+draw_detections(rotated_img_path, json_data, img_path_out)
+print(img_path_out)
 
-img_path_out = f"{file_name}-{lang}({isPreprocessing})-out{file_extension}"
-
-draw_detections_and_texts(rotated_img_path, json_data, img_path_out)
-
-with open(f'ocr_result-{file_name}({isPreprocessing}).json', 'w', encoding='utf-8') as json_file:
+with open(f'./result/ocr_result-{file_name}-{lang}({isPreprocessing}).json', 'w', encoding='utf-8') as json_file:
     json.dump(json_data, json_file, ensure_ascii=False, indent=4)
 
 for detection in json_data_sorted:
     text = detection["text"]
     confidence = detection["confidence"]
     box = detection["box"]
-    print(text + " : " + str(confidence))
+    # print(text + "   : " + str(confidence))
